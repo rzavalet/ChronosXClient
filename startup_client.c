@@ -2,6 +2,7 @@
 #include <stdlib.h>
 #include <unistd.h>
 #include <string.h>
+#include <getopt.h>
 #include <pthread.h>
 #include <time.h>
 #include <assert.h>
@@ -48,8 +49,9 @@
     } \
   } while(0)
 
-int benchmark_debug_level = 0;
-int client_debug_level = 0;
+int benchmark_debug_level = CHRONOS_DEBUG_LEVEL_MIN;
+int client_debug_level = CHRONOS_DEBUG_LEVEL_MIN;
+int chronos_debug_level = CHRONOS_DEBUG_LEVEL_MIN;
 
 typedef struct chronosClientContext_t {
   char    serverAddress[256];
@@ -138,12 +140,12 @@ chronosUsage()
     "Starts up a number of chronos clients\n"
     "\n"
     "OPTIONS:\n"
-    "-c [num]              number of threads (default: %d)\n"
-    "-a [address]          server ip address (default: %s)\n"
-    "-p [num]              server port (default: %d)\n"
-    "-v [num]              percentage of user transactions (default: %d%)\n"
-    "-d [num]              debug level\n"
-    "-h                    help";
+    "-c|--clients [num]              number of threads (default: %d)\n"
+    "-a|--address [address]          server ip address (default: %s)\n"
+    "-p|--port [num]                 server port (default: %d)\n"
+    "-v|--view-transactions [num]    percentage of user transactions (default: %d%)\n"
+    "-d|--debug [num]                debug level\n"
+    "-h|--help                       help\n";
 
   snprintf(usage, sizeof(usage), template,
           CHRONOS_NUM_CLIENT_THREADS, CHRONOS_SERVER_ADDRESS, 
@@ -178,6 +180,17 @@ processArguments(int argc, char *argv[], chronosClientContext_t *contextP)
 
   int c;
 
+  int option_index = 0;
+
+  static struct option long_options[] = {
+                   {"clients",                required_argument, 0,  'c' },
+                   {"address",                required_argument, 0,  'a' },
+                   {"port",                   required_argument, 0,  'p' },
+                   {"view-transactions",      required_argument, 0,  'v' },
+                   {"debug",                  required_argument, 0,  'd' },
+                   {"help",                   no_argument      , 0,  'h' },
+                   {0,                        0,                 0,  0 }
+               };
   if (contextP == NULL) {
     client_error("Invalid argument");
     goto failXit;
@@ -187,8 +200,22 @@ processArguments(int argc, char *argv[], chronosClientContext_t *contextP)
 
   initProcessArguments(contextP);
 
-  while ((c = getopt(argc, argv, "n:c:a:p:v:d:h")) != -1) {
+  while (1) {
+    option_index = 0;
+
+    c = getopt_long(argc, argv, 
+                    "c:a:p:v:d:h",
+                    long_options, &option_index);
+    if (c == -1) {
+      break;
+    }
+
     switch(c) {
+      case 0:
+        if (long_options[option_index].flag != 0) {
+          break;
+        }
+
       case 'c':
         contextP->numClientsThreads = atoi(optarg);
         client_debug(2,"*** Num clients: %d", contextP->numClientsThreads);
@@ -261,16 +288,17 @@ waitClientThreads(int num_threads, chronosClientThreadInfo_t *infoP, chronosClie
   int i;
   int rc;
   int *thread_rc = NULL;
+  pthread_t tid = pthread_self();
 
-  client_debug(5, "Waiting for client threads termination");
+  client_debug(5, "%lu: Waiting for client threads termination", tid);
   for (i=0; i<num_threads; i++) {
     rc = pthread_join(infoP[i].thread_id, (void **)&thread_rc);
     if (rc != CHRONOS_CLIENT_SUCCESS) {
       client_error("Failed while joining thread %d", infoP[i].thread_num);
     }
-    client_debug(4,"Thread %d finished", infoP[i].thread_num);
+    client_debug(4,"%lu: Thread %d finished", tid, infoP[i].thread_num);
   }
-  client_debug(5,"Done with client threads termination");
+  client_debug(5,"%lu: Done with client threads termination", tid);
 
   return CHRONOS_CLIENT_SUCCESS;
 }
@@ -287,6 +315,7 @@ spawnClientThreads(int num_threads, chronosClientThreadInfo_t **info_ret, chrono
   int i;
   int rc;
   const int stack_size = 0x100000; // 1 MB
+  pthread_t tid = pthread_self();
 
   if (num_threads < 1 || info_ret == NULL || contextP == NULL) {
     client_error("invalid arguments");
@@ -312,7 +341,7 @@ spawnClientThreads(int num_threads, chronosClientThreadInfo_t **info_ret, chrono
   }
 
   /* Spawn N client threads*/
-  client_debug(5,"Spawning %d client threads", num_threads);
+  client_debug(5,"%lu: Spawning %d client threads", tid, num_threads);
   for (i=0; i<num_threads; i++) {
     infoP[i].thread_num = i+ 1;
     infoP[i].contextP = contextP;
@@ -326,9 +355,9 @@ spawnClientThreads(int num_threads, chronosClientThreadInfo_t **info_ret, chrono
       goto failXit;
     }
 
-    client_debug(4,"Spawed thread: %d", infoP[i].thread_num);
+    client_debug(4,"%lu: Spawed thread: %d", tid, infoP[i].thread_num);
   }
-  client_debug(5,"Done spawning %d client threads", num_threads);
+  client_debug(5,"%lu: Done spawning %d client threads", tid, num_threads);
 
   *info_ret = infoP;
 
@@ -368,10 +397,7 @@ userTransactionThread(void *argP)
   CHRONOS_CACHE_H         cacheH = NULL;
   CHRONOS_CLIENT_CACHE_H  clientCacheH = NULL;
   chronosUserTransaction_t txnType;
-  int inLoadPhase = 1;
-#define CHRONOS_CLIENT_LOAD_ITERATIONS  10
 #define CHRONOS_CLIENT_SAMPLING_INTERVAL  10
-  int loadIterations = 0;
   int cnt_txns = 0;
   int cnt_view_stock = 0;
   int cnt_view_portfolio = 0;
@@ -383,7 +409,10 @@ userTransactionThread(void *argP)
   time_t current_time;
   time_t next_sample_time;
   int sample_period = 0;
-
+  pthread_t tid = pthread_self();
+  int initial_load = 1;
+  int num_loads = 0;
+  int num_portfolios = 0;
   int rc = CHRONOS_CLIENT_SUCCESS;
 
   if (infoP == NULL || infoP->contextP == NULL) {
@@ -391,7 +420,7 @@ userTransactionThread(void *argP)
     goto cleanup;
   }
 
-  client_debug(3,"This is thread: %d", infoP->thread_num);
+  client_debug(3,"%lu: This is thread: %d", tid, infoP->thread_num);
 
   envH = infoP->contextP->chronosEnvH;
   if (envH == NULL) {
@@ -410,6 +439,7 @@ userTransactionThread(void *argP)
   clientCacheH = chronosClientCacheAlloc(infoP->thread_num,
                                          infoP->contextP->numClientsThreads, 
                                          cacheH);
+  num_portfolios = chronosClientCacheNumPortfoliosGet(clientCacheH);
 
   current_time = time(NULL);
   next_sample_time = current_time + CHRONOS_CLIENT_SAMPLING_INTERVAL;
@@ -428,17 +458,12 @@ userTransactionThread(void *argP)
       goto cleanup;
     }
 
-    /* First we run a few purchases to warm up the system */
-    loadIterations ++;
-    if (loadIterations >= CHRONOS_CLIENT_LOAD_ITERATIONS) {
-      inLoadPhase = 0;
-    }
-
-    if (inLoadPhase) {
-      txnType = CHRONOS_USER_TXN_PURCHASE;
-      cnt_view_purchase ++;  
+    if (initial_load) {
+      client_debug(3,"%lu: Initial population of portfolios: %d/%d", tid, num_loads, num_portfolios);
+      requestH = chronosRequestCreateForClient(num_loads, clientCacheH, envH);
     }
     else {
+
       /* Pick a transaction type */
       if (pickTransactionType(&txnType, infoP) != CHRONOS_CLIENT_SUCCESS) {
         client_error("Failed to pick transaction type");
@@ -456,9 +481,10 @@ userTransactionThread(void *argP)
       else if (txnType == CHRONOS_USER_TXN_SALE) {
         cnt_view_sale ++;
       }
+
+      requestH = chronosRequestCreate(0, txnType, clientCacheH, envH);
     }
 
-    requestH = chronosRequestCreate(txnType, clientCacheH, envH);
     if (requestH == NULL) {
       client_error("Failed to populate request");
       goto cleanup;
@@ -471,8 +497,17 @@ userTransactionThread(void *argP)
       goto cleanup;
     }
 
+    if (initial_load) {
+      num_loads ++;
+
+      if (num_loads == num_portfolios) {
+        initial_load = 0;
+        client_debug(3,"%lu: Finished initial population of portfolios", tid);
+      }
+    }
+
     cnt_txns ++;
-    client_debug(3,"[thr: %d] txn count: %d", infoP->thread_num, cnt_txns);
+    client_debug(3,"%lu: [thr: %d] txn count: %d", tid, infoP->thread_num, cnt_txns);
     
     rc = chronosClientReceiveResponse(&txn_rc, connectionH, infoP->contextP->timeToDieFp);
     if (rc != CHRONOS_CLIENT_SUCCESS) {
@@ -486,6 +521,8 @@ userTransactionThread(void *argP)
     else {
       cnt_fail ++;
     }
+
+    client_debug(3,"%lu: [thr: %d] txn rc: %d", tid, infoP->thread_num, txn_rc);
 
     rc = chronosRequestFree(requestH);
     if (rc != CHRONOS_CLIENT_SUCCESS) {
@@ -514,15 +551,18 @@ userTransactionThread(void *argP)
       next_sample_time = current_time + CHRONOS_CLIENT_SAMPLING_INTERVAL;
     }
 
-    /* Wait some time before issuing next request */
-    if (waitThinkTime(infoP->contextP->minThinkingTime,
-                      infoP->contextP->maxThinkingTime) != CHRONOS_CLIENT_SUCCESS) {
-      client_error("Error while waiting");
-      goto cleanup;
+    if (!initial_load) {
+      client_debug(3,"%lu: [thr: %d] think time....", tid, infoP->thread_num);
+      /* Wait some time before issuing next request */
+      if (waitThinkTime(infoP->contextP->minThinkingTime,
+                        infoP->contextP->maxThinkingTime) != CHRONOS_CLIENT_SUCCESS) {
+        client_error("Error while waiting");
+        goto cleanup;
+      }
     }
 
     if (time_to_die == 1) {
-      client_info("Requested termination");
+      client_info("%lu: Requested termination", tid);
       break;
     }
   }
@@ -539,6 +579,7 @@ cleanup:
     client_error("Failed to free connection handle");
   }
 
+  client_info("%lu: userTransactionThread exiting", tid);
   pthread_exit(NULL);
 }
 
@@ -548,17 +589,14 @@ cleanup:
 static int
 pickTransactionType(chronosUserTransaction_t *txn_type_ret, chronosClientThreadInfo_t *infoP) 
 {
-#ifdef CHRONOS_ALL_TXN_AVAILABLE
   int random_num;
   int percentage;
-#endif
 
   if (infoP == NULL || infoP->contextP == NULL || txn_type_ret == NULL) {
     client_error("Invalid argument");
     goto failXit;
   }
 
-#ifdef CHRONOS_ALL_TXN_AVAILABLE
   percentage = infoP->contextP->percentageViewStockTransactions;
 
   random_num = rand() % 100;
@@ -588,9 +626,9 @@ pickTransactionType(chronosUserTransaction_t *txn_type_ret, chronosClientThreadI
         break;
     }
   }
-#else
-  //*txn_type_ret = CHRONOS_USER_TXN_VIEW_STOCK;
-  *txn_type_ret = CHRONOS_USER_TXN_PURCHASE;
+
+#if 0
+  *txn_type_ret = CHRONOS_USER_TXN_SALE;
 #endif
 
   client_debug(3,"Selected transaction type is: %s", CHRONOS_TXN_NAME(*txn_type_ret));

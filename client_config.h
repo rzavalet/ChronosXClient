@@ -8,6 +8,8 @@
 #ifndef CLIENT_CONFIG_H_
 #define CLIENT_CONFIG_H_
 
+#define CHRONOS_DEBUG
+#define CHRONOS_ALL_TXN_AVAILABLE
 
 /* These are the directories where the databases and the datafiles live.
  * Before starting up the server, the datafiles should be moved to the
@@ -27,7 +29,7 @@
  * at 900 and it can increase up to 1800
  */
 #ifdef CHRONOS_DEBUG
-#define CHRONOS_NUM_CLIENT_THREADS    10
+#define CHRONOS_NUM_CLIENT_THREADS    1
 #else
 #define CHRONOS_NUM_CLIENT_THREADS    900
 #endif
