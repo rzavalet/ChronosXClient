@@ -441,6 +441,16 @@ userTransactionThread(void *argP)
                                          cacheH);
   num_portfolios = chronosClientCacheNumPortfoliosGet(clientCacheH);
 
+  /* connect to the chronos server */
+  rc = chronosClientConnect(infoP->contextP->serverAddress,
+                            infoP->contextP->serverPort,
+                            NULL,
+                            connectionH);
+  if (rc != CHRONOS_CLIENT_SUCCESS) {
+    client_error("Could not connect to chronos server");
+    goto cleanup;
+  }
+
   current_time = time(NULL);
   next_sample_time = current_time + CHRONOS_CLIENT_SAMPLING_INTERVAL;
 
@@ -448,6 +458,7 @@ userTransactionThread(void *argP)
   while(1) {
     CHRONOS_REQUEST_H requestH = NULL;
     
+#if 0
     /* connect to the chronos server */
     rc = chronosClientConnect(infoP->contextP->serverAddress,
                               infoP->contextP->serverPort,
@@ -457,6 +468,7 @@ userTransactionThread(void *argP)
       client_error("Could not connect to chronos server");
       goto cleanup;
     }
+#endif
 
     if (initial_load) {
       client_debug(3,"%lu: Initial population of portfolios: %d/%d", tid, num_loads, num_portfolios);
@@ -530,11 +542,13 @@ userTransactionThread(void *argP)
       goto cleanup;
     }
 
+#if 0
     /* disconnect from the chronos server */
     rc = chronosClientDisconnect(connectionH);
     if (rc != CHRONOS_CLIENT_SUCCESS) {
       client_error("Failed to disconnect from server");
     }
+#endif
 
     current_time = time(NULL);
     if (current_time >= next_sample_time) {
