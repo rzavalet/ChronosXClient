@@ -50,7 +50,7 @@
   } while(0)
 
 int benchmark_debug_level = CHRONOS_DEBUG_LEVEL_MIN;
-int client_debug_level = CHRONOS_DEBUG_LEVEL_MIN;
+int client_debug_level = CHRONOS_DEBUG_LEVEL_MIN + 1;
 int chronos_debug_level = CHRONOS_DEBUG_LEVEL_MIN;
 
 typedef struct chronosClientContext_t {
@@ -471,7 +471,7 @@ userTransactionThread(void *argP)
 #endif
 
     if (initial_load) {
-      client_debug(3,"%lu: Initial population of portfolios: %d/%d", tid, num_loads, num_portfolios);
+      client_debug(1,"%lu: Initial population of portfolios: %d/%d", tid, num_loads, num_portfolios);
       requestH = chronosRequestCreateForClient(num_loads, clientCacheH, envH);
     }
     else {
@@ -511,10 +511,11 @@ userTransactionThread(void *argP)
 
     if (initial_load) {
       num_loads ++;
+      client_debug(1,"%lu: initial population: %d/%d", tid, num_loads, num_portfolios);
 
       if (num_loads == num_portfolios) {
         initial_load = 0;
-        client_debug(3,"%lu: Finished initial population of portfolios", tid);
+        client_debug(1,"%lu: Finished initial population of portfolios", tid);
       }
     }
 
