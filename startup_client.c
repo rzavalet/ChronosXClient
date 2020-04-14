@@ -70,7 +70,8 @@ typedef struct chronosClientContext_t {
   
   int     (*timeToDieFp)(void);
 
-  CHRONOS_ENV_H  chronosEnvH;
+  CHRONOS_CLIENT_CACHE_H  clientCacheH;
+  CHRONOS_ENV_H   chronosEnvH;
 } chronosClientContext_t;
 
 typedef struct chronosClientThreadInfo_t {
@@ -101,6 +102,7 @@ chronosUsage();
 static void 
 sigintHandler(int sig);
 
+volatile int cache_ready = 0;
 int time_to_die = 0;
 
 int isTimeToDie()
@@ -117,7 +119,8 @@ waitThinkTime(int minThinkTimeMS, int maxThinkTimeMS)
   struct timespec waitPeriod;
   int randomWaitTimeMS;
 
-  randomWaitTimeMS = minThinkTimeMS + (rand() % (1 + maxThinkTimeMS - minThinkTimeMS));
+  //randomWaitTimeMS = minThinkTimeMS + (rand() % (1 + maxThinkTimeMS - minThinkTimeMS));
+  randomWaitTimeMS = minThinkTimeMS;
    
   waitPeriod.tv_sec = randomWaitTimeMS / 1000;
   waitPeriod.tv_nsec = ((int)randomWaitTimeMS % 1000) * 1000000;
@@ -356,7 +359,12 @@ spawnClientThreads(int num_threads, chronosClientThreadInfo_t **info_ret, chrono
     }
 
     client_debug(4,"%lu: Spawed thread: %d", tid, infoP[i].thread_num);
+
+    while (cache_ready == 0) {
+      sleep(1);
+    }
   }
+
   client_debug(5,"%lu: Done spawning %d client threads", tid, num_threads);
 
   *info_ret = infoP;
@@ -414,6 +422,7 @@ userTransactionThread(void *argP)
   int num_loads = 0;
   int num_portfolios = 0;
   int rc = CHRONOS_CLIENT_SUCCESS;
+  int own_cache = 1;
 
   if (infoP == NULL || infoP->contextP == NULL) {
     client_error("Invalid argument");
@@ -436,9 +445,18 @@ userTransactionThread(void *argP)
 
   cacheH = chronosEnvCacheGet(envH);
 
-  clientCacheH = chronosClientCacheAlloc(infoP->thread_num,
-                                         infoP->contextP->numClientsThreads, 
-                                         cacheH);
+  if (infoP->contextP->clientCacheH == NULL) {
+    clientCacheH = chronosClientCacheAlloc(1 /* numClient */, 
+                                           1 /* numClients */,
+                                           cacheH);
+    infoP->contextP->clientCacheH = clientCacheH;
+  }
+  else {
+    clientCacheH = infoP->contextP->clientCacheH;
+    initial_load = 0;
+    own_cache = 0;
+  }
+
   num_portfolios = chronosClientCacheNumPortfoliosGet(clientCacheH);
 
   /* connect to the chronos server */
@@ -511,10 +529,10 @@ userTransactionThread(void *argP)
 
     if (initial_load) {
       num_loads ++;
-      client_debug(1,"%lu: initial population: %d/%d", tid, num_loads, num_portfolios);
 
       if (num_loads == num_portfolios) {
         initial_load = 0;
+        cache_ready = 1;
         client_debug(1,"%lu: Finished initial population of portfolios", tid);
       }
     }
@@ -554,18 +572,21 @@ userTransactionThread(void *argP)
     current_time = time(NULL);
     if (current_time >= next_sample_time) {
       sample_period ++;
-      fprintf(stderr,"STATS: thr: %d\t sample: %d\t count: %d\t success: %d (%.2f%%)\t fail: %d (%.2f%%)"
-                     "\t view_stock: %d (%.2f%%)\t view_portfolio: %d (%.2f%%)\t view_purchase: %d (%.2f%%)\t view_sale: %d (%.2f%%)\n"
-                     , infoP->thread_num, sample_period, cnt_txns
-                     , cnt_success, cnt_txns > 0 ? 100 * (float)cnt_success/cnt_txns : 0
-                     , cnt_fail, cnt_txns > 0 ? 100 * (float)cnt_fail/cnt_txns : 0
-                     , cnt_view_stock, cnt_txns > 0 ? 100 * (float)cnt_view_stock/cnt_txns : 0
-                     , cnt_view_portfolio, cnt_txns > 0 ? 100 * (float)cnt_view_portfolio/cnt_txns : 0
-                     , cnt_view_purchase, cnt_txns > 0 ? 100 * (float)cnt_view_purchase/cnt_txns : 0
-                     , cnt_view_sale, cnt_txns > 0 ? 100 * (float)cnt_view_sale/cnt_txns : 0); 
+      if (initial_load == 0) {
+        fprintf(stderr,"STATS: thr: %d\t sample: %d\t count: %d\t success: %d (%.2f%%)\t fail: %d (%.2f%%)"
+                       "\t view_stock: %d (%.2f%%)\t view_portfolio: %d (%.2f%%)\t view_purchase: %d (%.2f%%)\t view_sale: %d (%.2f%%)\n"
+                       , infoP->thread_num, sample_period, cnt_txns
+                       , cnt_success, cnt_txns > 0 ? 100 * (float)cnt_success/cnt_txns : 0
+                       , cnt_fail, cnt_txns > 0 ? 100 * (float)cnt_fail/cnt_txns : 0
+                       , cnt_view_stock, cnt_txns > 0 ? 100 * (float)cnt_view_stock/cnt_txns : 0
+                       , cnt_view_portfolio, cnt_txns > 0 ? 100 * (float)cnt_view_portfolio/cnt_txns : 0
+                       , cnt_view_purchase, cnt_txns > 0 ? 100 * (float)cnt_view_purchase/cnt_txns : 0
+                       , cnt_view_sale, cnt_txns > 0 ? 100 * (float)cnt_view_sale/cnt_txns : 0); 
+      }
       next_sample_time = current_time + CHRONOS_CLIENT_SAMPLING_INTERVAL;
     }
 
+#if 1
     if (!initial_load) {
       client_debug(3,"%lu: [thr: %d] think time....", tid, infoP->thread_num);
       /* Wait some time before issuing next request */
@@ -575,6 +596,7 @@ userTransactionThread(void *argP)
         goto cleanup;
       }
     }
+#endif
 
     if (time_to_die == 1) {
       client_info("%lu: Requested termination", tid);
@@ -628,11 +650,13 @@ pickTransactionType(chronosUserTransaction_t *txn_type_ret, chronosClientThreadI
         break;
 
       case 1:
-        *txn_type_ret = CHRONOS_USER_TXN_PURCHASE;
+        *txn_type_ret = CHRONOS_USER_TXN_VIEW_PORTFOLIO;
+        //*txn_type_ret = CHRONOS_USER_TXN_PURCHASE;
         break;
 
       case 2:
-        *txn_type_ret = CHRONOS_USER_TXN_SALE;
+        *txn_type_ret = CHRONOS_USER_TXN_VIEW_PORTFOLIO;
+        //*txn_type_ret = CHRONOS_USER_TXN_SALE;
         break;
 
       default:
