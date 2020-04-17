@@ -51,10 +51,10 @@
 
 int benchmark_debug_level = CHRONOS_DEBUG_LEVEL_MIN;
 int client_debug_level = CHRONOS_DEBUG_LEVEL_MIN + 1;
-int chronos_debug_level = CHRONOS_DEBUG_LEVEL_MIN;
+extern int chronos_debug_level;
 
 typedef struct chronosClientContext_t {
-  char    serverAddress[256];
+  char    serverAddress[100];
   int     serverPort;
   int     numTransactions;
   double  duration_sec;
@@ -699,6 +699,7 @@ int main(int argc, char *argv[])
 {
   chronosClientContext_t client_context;
   chronosClientThreadInfo_t *thread_infoP = NULL;
+  chronos_debug_level = CHRONOS_DEBUG_LEVEL_MIN;
 
   srand(time(NULL));
 

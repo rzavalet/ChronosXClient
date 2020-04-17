@@ -35,7 +35,7 @@
 #endif
 
 
-#define CHRONOS_MIN_THINK_TIME_MS          (400)
+#define CHRONOS_MIN_THINK_TIME_MS          (30)
 #define CHRONOS_MAX_THINK_TIME_MS          (1000)
 
 
