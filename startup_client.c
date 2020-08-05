@@ -586,7 +586,7 @@ userTransactionThread(void *argP)
       next_sample_time = current_time + CHRONOS_CLIENT_SAMPLING_INTERVAL;
     }
 
-#if 1
+#if 0
     if (!initial_load) {
       client_debug(3,"%lu: [thr: %d] think time....", tid, infoP->thread_num);
       /* Wait some time before issuing next request */
